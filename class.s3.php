@@ -94,6 +94,11 @@ class S3 {
 	* @param string $bucket Bucket name
 	* @return array | false
 	*/
+	public static function console_log( $data ){
+  echo '<script>';
+  echo 'console.log('. json_encode( $data ) .')';
+  echo '</script>';
+	}
 	public static function getBucket($bucket) {
 		$rest = new S3Request('GET', $bucket, '');
 		$response = $rest->getResponse();
@@ -118,6 +123,36 @@ class S3 {
 		
 		return $results;
 	}
+	
+	// getBucket modification
+	public static function myGetBucket($bucket) {
+		$rest = new S3Request('GET', $bucket, '');
+		$response = $rest->getResponse(array('hotfix' => true));
+		if ($response->error === false && $response->code !== 200)
+			$response->error = array('code' => $response->code, 'message' => 'Unexpected HTTP status');
+		if ($response->error !== false) {
+			trigger_error(sprintf("S3::getBucket(): [%s] %s", $response->error['code'], $response->error['message']), E_USER_WARNING);
+			return false;
+		}
+		$results = array();
+		// die(json_encode($response));
+		$contents = simplexml_load_string($response->body);
+		if (isset($contents->Contents)) {
+			foreach ($contents->Contents as $c) {
+				$results[] = array(
+					'name' => (string)$c->Key,
+					'time' => strToTime((string)$c->LastModified),
+					'size' => (int)$c->Size,
+					'hash' => substr((string)$c->ETag, 1, -1)
+				);
+			}
+		}
+		
+		// S3::console_log($results,'myGetBucket results');
+		
+		return $results;
+	}
+	
 	/**
 	* Put a bucket
 	*
@@ -684,7 +719,7 @@ final class S3Request {
 	*
 	* @return object | false
 	*/
-	public function getResponse() {
+	public function getResponse($opt = array()) {
 		$query = '';
 		if (sizeof($this->parameters) > 0) {
 			$query = substr($this->uri, -1) !== '?' ? '?' : '&';
@@ -723,8 +758,12 @@ final class S3Request {
 		curl_setopt($curl, CURLOPT_HTTPHEADER, $headers);
 		curl_setopt($curl, CURLOPT_HEADER, false);
 		curl_setopt($curl, CURLOPT_RETURNTRANSFER, false);
-		curl_setopt($curl, CURLOPT_WRITEFUNCTION, array(&$this, '__responseWriteCallback'));
-		curl_setopt($curl, CURLOPT_HEADERFUNCTION, array(&$this, '__responseHeaderCallback'));
+		if (!isset($opt['hotfix'])) {
+			curl_setopt($curl, CURLOPT_WRITEFUNCTION, array(&$this, '__responseWriteCallback'));
+			curl_setopt($curl, CURLOPT_HEADERFUNCTION, array(&$this, '__responseHeaderCallback'));
+		}else{
+			curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
+		}
 		// Request types
 		switch ($this->verb) {
 			case 'GET': break;
@@ -752,7 +791,8 @@ final class S3Request {
 			default: break;
 		}
 		// Execute, grab errors
-		if (curl_exec($curl))
+		$curl_result = curl_exec($curl);
+		if ($curl_result)
 			$this->response->code = curl_getinfo($curl, CURLINFO_HTTP_CODE);
 		else
 			$this->response->error = array(
@@ -760,6 +800,11 @@ final class S3Request {
 				'message' => curl_error($curl),
 				'resource' => $this->resource
 			);
+			
+		if (isset($opt['hotfix'])) {
+			$this->response->body = $curl_result;
+		}
+	  // die(json_encode($this->response));
 		@curl_close($curl);
 		// Parse body into XML
 		if ($this->response->error === false && isset($this->response->headers['type']) &&
